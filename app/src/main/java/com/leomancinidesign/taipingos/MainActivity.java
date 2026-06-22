@@ -1,9 +1,11 @@
 package com.leomancinidesign.taipingos;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.WindowManager;
+import android.webkit.GeolocationPermissions;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -11,6 +13,8 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -20,7 +24,21 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String APP_URL = "https://tai-ping-os.leo.gd?onDevice=true";
 
+    // OS-level runtime permissions to request up front so the page's camera,
+    // microphone and geolocation requests (granted via the WebChromeClient
+    // callbacks below) actually receive data.
+    private static final String[] RUNTIME_PERMISSIONS = {
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+    };
+
     private WebView webView;
+
+    private final ActivityResultLauncher<String[]> requestPermissions =
+            registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(),
+                    result -> loadApp());
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -46,15 +64,23 @@ public class MainActivity extends AppCompatActivity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
+        s.setGeolocationEnabled(true);
 
         // Keep navigation inside the WebView rather than spawning a browser.
         webView.setWebViewClient(new WebViewClient());
 
-        // Grant any in-page permission requests (e.g. camera/mic) automatically.
+        // Grant any in-page permission requests (camera/mic, geolocation)
+        // automatically; the OS-level permissions are obtained up front below.
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 runOnUiThread(() -> request.grant(request.getResources()));
+            }
+
+            @Override
+            public void onGeolocationPermissionsShowPrompt(
+                    String origin, GeolocationPermissions.Callback callback) {
+                callback.invoke(origin, true, false);
             }
         });
 
@@ -72,6 +98,14 @@ public class MainActivity extends AppCompatActivity {
         });
 
         if (savedInstanceState == null) {
+            // Request all runtime permissions first; loadApp() runs once the
+            // user has responded (whatever the outcome).
+            requestPermissions.launch(RUNTIME_PERMISSIONS);
+        }
+    }
+
+    private void loadApp() {
+        if (webView != null) {
             webView.loadUrl(APP_URL);
         }
     }
