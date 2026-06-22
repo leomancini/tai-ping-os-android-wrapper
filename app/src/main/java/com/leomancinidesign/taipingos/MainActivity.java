@@ -18,7 +18,7 @@ import androidx.core.view.WindowInsetsControllerCompat;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String APP_URL = "https://tai-ping-os.leo.gd";
+    private static final String APP_URL = "https://tai-ping-os.leo.gd?onDevice=true";
 
     private WebView webView;
 
