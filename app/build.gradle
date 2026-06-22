@@ -2,6 +2,15 @@ plugins {
     id 'com.android.application'
 }
 
+// Load the API key from secrets.properties (gitignored). The value is embedded
+// into the build via BuildConfig but never committed to source control.
+def secretsFile = rootProject.file("secrets.properties")
+def secrets = new Properties()
+if (secretsFile.exists()) {
+    secrets.load(new FileInputStream(secretsFile))
+}
+def taiPingApiKey = secrets.getProperty("TAI_PING_API_KEY", "")
+
 android {
     namespace 'com.leomancinidesign.taipingos'
     compileSdk 34
@@ -12,6 +21,12 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+
+        buildConfigField "String", "TAI_PING_API_KEY", "\"${taiPingApiKey}\""
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     buildTypes {

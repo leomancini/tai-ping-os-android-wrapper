@@ -22,7 +22,10 @@ import androidx.core.view.WindowInsetsControllerCompat;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String APP_URL = "https://tai-ping-os.leo.gd?onDevice=true";
+    // The API key is supplied at build time from secrets.properties via BuildConfig,
+    // keeping it out of source control while still embedding it in the app.
+    private static final String APP_URL =
+            "https://tai-ping-os.leo.gd/?onDevice=true&key=" + BuildConfig.TAI_PING_API_KEY;
 
     // OS-level runtime permissions to request up front so the page's camera,
     // microphone and geolocation requests (granted via the WebChromeClient
