@@ -2,20 +2,28 @@ package com.leomancinidesign.taipingos;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.content.ContentValues;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Configuration;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.text.InputType;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.webkit.GeolocationPermissions;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
@@ -25,6 +33,14 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -45,9 +61,42 @@ public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
 
+    // Pending callback for an in-page <input type="file"> (used by the OS's
+    // backup "Restore" picker). Held while the system file chooser is open.
+    private ValueCallback<Uri[]> fileChooserCallback;
+
     private final ActivityResultLauncher<String[]> requestPermissions =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(),
                     result -> loadApp());
+
+    // Receives the document the user picked and hands it back to the WebView so
+    // the <input type="file"> resolves (the page then reads it via FileReader).
+    private final ActivityResultLauncher<Intent> fileChooserLauncher =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(),
+                    result -> {
+                        Uri[] uris = null;
+                        if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                            Uri data = result.getData().getData();
+                            if (data != null) {
+                                uris = new Uri[]{data};
+                            }
+                        }
+                        if (fileChooserCallback != null) {
+                            fileChooserCallback.onReceiveValue(uris);
+                            fileChooserCallback = null;
+                        }
+                    });
+
+    // Up-front runtime permissions. On pre-Q devices, writing a backup to the
+    // public Downloads folder needs the legacy storage permission too; on Q+
+    // MediaStore handles it without any permission.
+    private String[] buildRuntimePermissions() {
+        List<String> perms = new ArrayList<>(Arrays.asList(RUNTIME_PERMISSIONS));
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        }
+        return perms.toArray(new String[0]);
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -64,6 +113,11 @@ public class MainActivity extends AppCompatActivity {
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setGeolocationEnabled(true);
+
+        // Lets the page save a backup file to the device's Downloads folder.
+        // The page builds the JSON locally and passes it here; nothing is sent
+        // over the network.
+        webView.addJavascriptInterface(new FileBridge(), "AndroidFile");
 
         // When a hardware keyboard is attached the soft IME still binds to
         // focused web text fields and shows a slim "physical keyboard" bar.
@@ -97,6 +151,30 @@ public class MainActivity extends AppCompatActivity {
                     String origin, GeolocationPermissions.Callback callback) {
                 callback.invoke(origin, true, false);
             }
+
+            // Drive the system document picker for in-page file inputs (the
+            // backup "Restore" flow). The chosen file is returned to the
+            // WebView, which feeds it to the <input> for the page to read.
+            @Override
+            public boolean onShowFileChooser(WebView view,
+                    ValueCallback<Uri[]> callback, FileChooserParams params) {
+                if (fileChooserCallback != null) {
+                    fileChooserCallback.onReceiveValue(null);
+                }
+                fileChooserCallback = callback;
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                // "*/*" so JSON backups are always selectable; the page's accept
+                // attribute still hints the right type to the picker.
+                intent.setType("*/*");
+                try {
+                    fileChooserLauncher.launch(intent);
+                } catch (Exception e) {
+                    fileChooserCallback = null;
+                    return false;
+                }
+                return true;
+            }
         });
 
         // Hardware back button navigates web history before exiting the app.
@@ -115,7 +193,7 @@ public class MainActivity extends AppCompatActivity {
         if (savedInstanceState == null) {
             // Request all runtime permissions first; loadApp() runs once the
             // user has responded (whatever the outcome).
-            requestPermissions.launch(RUNTIME_PERMISSIONS);
+            requestPermissions.launch(buildRuntimePermissions());
         }
     }
 
@@ -214,5 +292,59 @@ public class MainActivity extends AppCompatActivity {
             webView = null;
         }
         super.onDestroy();
+    }
+
+    // JavaScript bridge exposed to the page as `window.AndroidFile`. Lets the
+    // OS save a backup file to the device's Downloads folder. It only ever
+    // writes text the page hands it — it cannot read anything back — so user
+    // data still never leaves the device.
+    private class FileBridge {
+        @JavascriptInterface
+        public void saveTextFile(String filename, String content) {
+            runOnUiThread(() -> {
+                boolean ok = writeToDownloads(filename, content);
+                Toast.makeText(MainActivity.this,
+                        ok ? "Saved " + filename + " to Downloads"
+                           : "Couldn't save backup",
+                        Toast.LENGTH_LONG).show();
+            });
+        }
+    }
+
+    // Write a UTF-8 text file into the public Downloads collection. Uses
+    // MediaStore on Android Q+ (no permission needed) and the legacy public
+    // directory on older versions (guarded by WRITE_EXTERNAL_STORAGE).
+    private boolean writeToDownloads(String filename, String content) {
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Downloads.DISPLAY_NAME, filename);
+            values.put(MediaStore.Downloads.MIME_TYPE, "application/json");
+            values.put(MediaStore.Downloads.IS_PENDING, 1);
+            Uri item = getContentResolver()
+                    .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            if (item == null) return false;
+            try (OutputStream os = getContentResolver().openOutputStream(item)) {
+                if (os == null) return false;
+                os.write(bytes);
+            } catch (Exception e) {
+                return false;
+            }
+            values.clear();
+            values.put(MediaStore.Downloads.IS_PENDING, 0);
+            getContentResolver().update(item, values, null, null);
+            return true;
+        }
+        try {
+            File dir = Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS);
+            if (!dir.exists()) dir.mkdirs();
+            try (FileOutputStream fos = new FileOutputStream(new File(dir, filename))) {
+                fos.write(bytes);
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 }
