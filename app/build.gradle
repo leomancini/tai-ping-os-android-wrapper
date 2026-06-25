@@ -11,6 +11,15 @@ if (secretsFile.exists()) {
 }
 def taiPingApiKey = secrets.getProperty("TAI_PING_API_KEY", "")
 
+// Optional stable signing key, also from secrets.properties (gitignored). When
+// configured, every build — on any machine — is signed with the SAME key, so a
+// new build installs over an existing one as an update and preserves on-device
+// data (IndexedDB). Without it, builds fall back to the default per-machine
+// debug key, where a different machine would force an uninstall (and data loss).
+def keystorePath = secrets.getProperty("TAI_PING_KEYSTORE_FILE", "")
+def keystoreFile = keystorePath ? rootProject.file(keystorePath) : null
+def hasSigningKey = keystoreFile != null && keystoreFile.exists()
+
 android {
     namespace 'com.leomancinidesign.taipingos'
     compileSdk 34
@@ -29,9 +38,30 @@ android {
         buildConfig true
     }
 
+    signingConfigs {
+        if (hasSigningKey) {
+            stable {
+                storeFile keystoreFile
+                storePassword secrets.getProperty("TAI_PING_KEYSTORE_PASSWORD", "")
+                keyAlias secrets.getProperty("TAI_PING_KEY_ALIAS", "")
+                keyPassword secrets.getProperty("TAI_PING_KEY_PASSWORD", "")
+            }
+        }
+    }
+
     buildTypes {
+        // Both build types use the stable key when it's configured, so whichever
+        // one you flash can update in place without wiping data.
         release {
             minifyEnabled false
+            if (hasSigningKey) {
+                signingConfig signingConfigs.stable
+            }
+        }
+        debug {
+            if (hasSigningKey) {
+                signingConfig signingConfigs.stable
+            }
         }
     }
 
