@@ -25,6 +25,30 @@ $ADB shell monkey -p com.leomancinidesign.taipingos -c android.intent.category.L
 The API key is injected at build time from a gitignored `secrets.properties`
 (`TAI_PING_API_KEY`) via `BuildConfig`.
 
+### Per-phone API key — ALWAYS confirm before flashing
+
+Each phone belongs to a person and must be flashed with **that person's**
+`TAI_PING_API_KEY`. The APK bakes in whatever key is in `secrets.properties` at
+build time, so flashing the wrong build puts the wrong person's key on the phone.
+
+**Every time you flash a phone, stop and ask the user whose phone it is** — get
+them to either:
+
+- **Name the person** so you use their existing key (e.g. Leo →
+  `tpk_leo_…`, Anna → `tpk_anna_…`), or
+- **Provide a new key** to create, if it's a new person/phone.
+
+Then set that key in `secrets.properties`, rebuild, flash, and restore the
+file's default key afterward. Verify the right key landed by checking the
+generated `BuildConfig.java`:
+
+```sh
+find . -name BuildConfig.java -path '*debug*' -exec grep TAI_PING_API_KEY {} \;
+```
+
+Do NOT assume the key already in `secrets.properties` is correct for the phone
+in front of you.
+
 ### Flashing to the phone
 
 1. Connect the phone over USB (USB debugging must be enabled in Developer
