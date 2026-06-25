@@ -49,6 +49,74 @@ The API key is injected at build time from a gitignored `secrets.properties`
 
 If `install` fails with a signature/downgrade error, uninstall first:
 `$ADB uninstall com.leomancinidesign.taipingos`. Package id: `com.leomancinidesign.taipingos`.
+**But do NOT reflexively uninstall — that deletes all user data.** See the next
+section first.
+
+## Updating WITHOUT wiping the phone's data (signing fingerprint check)
+
+All user data — every user-created app, its saved data, and Notes — lives in the
+app's private on-device storage (IndexedDB in the WebView). `adb install -r`
+keeps that data **only if the new APK is signed with the same certificate as the
+installed app.** If the certs differ, `install -r` fails with a signature
+mismatch (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), and the only way to install is
+`adb uninstall` first — **which permanently deletes all the user's data.**
+
+This bites when building on a **different computer**: with no stable keystore
+configured, each machine signs with its own per-machine debug key
+(`~/.android/debug.keystore`), so a build from machine B will NOT match an app
+installed from machine A. (A stable shared key in `secrets.properties` —
+`TAI_PING_KEYSTORE_*`, see `secrets.properties.example` — avoids this entirely.)
+
+**Before flashing from a new machine, with the phone connected, check the
+fingerprints and only then decide how to install:**
+
+1. Fingerprint the app currently on the phone:
+
+   ```sh
+   APK_PATH=$($ADB shell pm path com.leomancinidesign.taipingos | sed 's/package://' | tr -d '\r' | head -1)
+   $ADB pull "$APK_PATH" /tmp/installed.apk
+   keytool -printcert -jarfile /tmp/installed.apk | grep -i SHA256
+   # or, with build-tools on PATH: apksigner verify --print-certs /tmp/installed.apk | grep -i SHA-256
+   ```
+
+2. Fingerprint the new build you're about to install:
+
+   ```sh
+   ./gradlew assembleDebug
+   APK=$(ls -t app/build/outputs/apk/debug/*.apk | head -1)
+   apksigner verify --print-certs "$APK" | grep -i SHA-256
+   # apksigner lives in $ANDROID_HOME/build-tools/<version>/apksigner
+   ```
+
+3. Compare the two SHA-256 values:
+   - **They MATCH** → safe to update in place, data preserved:
+     `$ADB install -r "$APK"`
+   - **They DIFFER** → installing means uninstall = data loss. **Do not uninstall
+     yet.** Pick one:
+     - **(Preferred) Sign the new build with the matching key.** Copy the
+       keystore that signed the installed app onto this machine (for a debug-key
+       app that's machine A's `~/.android/debug.keystore`), set
+       `TAI_PING_KEYSTORE_*` in `secrets.properties`, rebuild, re-check the
+       fingerprints, then `install -r`. Going forward, use one shared keystore on
+       every machine so this never recurs.
+     - **Or back up, then uninstall + reinstall + restore** (step 4).
+
+4. Back up the data before any uninstall:
+   - In the running app: **Settings → Back up** writes `tai-ping-backup-*.json`
+     to the phone's Downloads. Pull it off as a safety copy:
+
+     ```sh
+     $ADB shell ls /sdcard/Download/tai-ping-backup-*.json
+     $ADB pull "/sdcard/Download/<that-file>.json" .
+     ```
+
+   - After reinstalling the new build, open **Settings → Restore** and pick that
+     file to bring everything back.
+   - Caveat: the in-app Back up / Restore UI only appears on the **new** wrapper
+     build (it's hidden on the old one). If the phone still runs the old wrapper,
+     you can't back up from the UI — get onto the matching signing key instead so
+     you can update in place, or pull the WebView IndexedDB via `adb` if the build
+     is debuggable.
 
 ## Rendering scale / device-pixel-ratio (subpixel rendering)
 
