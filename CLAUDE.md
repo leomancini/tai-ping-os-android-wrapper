@@ -1,4 +1,4 @@
-# tai-ping-os-android
+# tai-ping-os-android-wrapper
 
 Fullscreen, landscape-locked Android WebView wrapper around the `tai-ping-os.leo.gd`
 web app (kiosk-style). All the app logic lives in the web app; this project is just
