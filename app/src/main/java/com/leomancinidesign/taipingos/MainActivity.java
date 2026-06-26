@@ -18,6 +18,7 @@ import android.view.inputmethod.InputConnection;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -65,6 +66,15 @@ public class MainActivity extends AppCompatActivity {
     // backup "Restore" picker). Held while the system file chooser is open.
     private ValueCallback<Uri[]> fileChooserCallback;
 
+    // Logcat tag for the lifecycle/config diagnostics below. Watch with:
+    //   adb logcat -s TaiPingCfg
+    private static final String CFG_TAG = "TaiPingCfg";
+
+    // Last seen configuration, used to report exactly which fields change in
+    // onConfigurationChanged (helps pin down what was recreating the Activity
+    // and bouncing the web app back to its home screen).
+    private Configuration lastConfig;
+
     private final ActivityResultLauncher<String[]> requestPermissions =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(),
                     result -> loadApp());
@@ -103,6 +113,13 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // A fresh onCreate while you were using the app means the Activity was
+        // recreated (which reloads the WebView and resets the web app to home).
+        // savedInstanceState != null indicates a recreation rather than a cold
+        // start. Pair this with onConfigurationChanged below to see the cause.
+        android.util.Log.i(CFG_TAG, "onCreate (recreated=" + (savedInstanceState != null) + ")");
+        lastConfig = new Configuration(getResources().getConfiguration());
+
         enableImmersiveMode();
 
         webView = new ImmersiveWebView(this);
@@ -136,7 +153,18 @@ public class MainActivity extends AppCompatActivity {
         });
 
         // Keep navigation inside the WebView rather than spawning a browser.
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new WebViewClient() {
+            // Fires if the system kills the WebView's renderer process (e.g.
+            // under memory pressure) rather than the Activity being recreated.
+            // This is the OTHER way the app can reset to home; logging it tells
+            // the two causes apart. Returning true keeps our app process alive.
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                android.util.Log.w(CFG_TAG, "WebView render process gone (didCrash="
+                        + detail.didCrash() + ") — page was lost");
+                return true;
+            }
+        });
 
         // Grant any in-page permission requests (camera/mic, geolocation)
         // automatically; the OS-level permissions are obtained up front below.
@@ -219,6 +247,26 @@ public class MainActivity extends AppCompatActivity {
         if (hasFocus) {
             enableImmersiveMode();
         }
+    }
+
+    // Fires for the configuration changes we now declare in the manifest
+    // (keyboard, navigation, uiMode, etc.) instead of the Activity being
+    // recreated. The diff() bitmask names exactly which field changed — e.g.
+    // CONFIG_KEYBOARD=0x10 (hardware keyboard connect/disconnect),
+    // CONFIG_NAVIGATION=0x20, CONFIG_UI_MODE=0x200. Watch with:
+    //   adb logcat -s TaiPingCfg
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        int changed = (lastConfig != null) ? lastConfig.diff(newConfig) : 0;
+        android.util.Log.i(CFG_TAG, "onConfigurationChanged: changed=0x"
+                + Integer.toHexString(changed)
+                + " keyboard=" + newConfig.keyboard
+                + " hardKeyboardHidden=" + newConfig.hardKeyboardHidden
+                + " navigation=" + newConfig.navigation
+                + " uiMode=0x" + Integer.toHexString(newConfig.uiMode)
+                + " orientation=" + newConfig.orientation);
+        lastConfig = new Configuration(newConfig);
+        super.onConfigurationChanged(newConfig);
     }
 
     private void loadApp() {
